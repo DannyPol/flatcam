@@ -1,11 +1,10 @@
 import sys
 import re
-import FlatCAMApp
+import app_Main
 import abc
 import collections
-from PyQt4 import QtCore
+from PyQt5 import QtCore
 from contextlib import contextmanager
-from FlatCAMObj import FlatCAMGerber, FlatCAMExcellon, FlatCAMGeometry, FlatCAMCNCjob, FlatCAMObj
 
 
 class TclCommand(object):
@@ -54,10 +53,12 @@ class TclCommand(object):
         if self.app is None:
             raise TypeError('Expected app to be FlatCAMApp instance.')
 
-        if not isinstance(self.app, FlatCAMApp.App):
+        if not isinstance(self.app, app_Main.App):
             raise TypeError('Expected FlatCAMApp, got %s.' % type(app))
 
         self.log = self.app.log
+        self.error_info = None
+        self.error = None
 
     def raise_tcl_error(self, text):
         """
@@ -70,7 +71,7 @@ class TclCommand(object):
         :return: none
         """
 
-        self.app.raise_tcl_error(text)
+        self.app.shell.raise_tcl_error(text)
 
     def get_current_command(self):
         """
@@ -78,7 +79,6 @@ class TclCommand(object):
 
         :return: current command
         """
-
         command_string = [self.aliases[0]]
 
         if self.original_args is not None:
@@ -116,7 +116,7 @@ class TclCommand(object):
             if help_key in self.arg_names:
                 arg_type = self.arg_names[help_key]
                 type_name = str(arg_type.__name__)
-                #in_command_name = help_key + "<" + type_name + ">"
+                # in_command_name = help_key + "<" + type_name + ">"
                 in_command_name = help_key
 
             elif help_key in self.option_types:
@@ -162,35 +162,43 @@ class TclCommand(object):
 
     @staticmethod
     def parse_arguments(args):
-            """
-            Pre-processes arguments to detect '-keyword value' pairs into dictionary
-            and standalone parameters into list.
+        """
+        Pre-processes arguments to detect '-keyword value' pairs into dictionary
+        and standalone parameters into list.
 
-            This is copy from FlatCAMApp.setup_shell().h() just for accessibility,
-            original should  be removed  after all commands will be converted
+        This is copy from FlatCAMApp.setup_shell().h() just for accessibility,
+        original should  be removed  after all commands will be converted
 
-            :param args: arguments from tcl to parse
-            :return: arguments, options
-            """
+        :param args: arguments from tcl to parse
+        :return: arguments, options
+        """
 
-            options = {}
-            arguments = []
-            n = len(args)
-            name = None
-            for i in range(n):
-                match = re.search(r'^-([a-zA-Z].*)', args[i])
-                if match:
-                    assert name is None
-                    name = match.group(1)
-                    continue
+        options = {}
+        arguments = []
+        n = len(args)
 
-                if name is None:
-                    arguments.append(args[i])
-                else:
-                    options[name] = args[i]
-                    name = None
+        option_name = None
 
-            return arguments, options
+        for i in range(n):
+            match = re.search(r'^-([a-zA-Z].*)', args[i])
+            if match:
+                # assert option_name is None
+                if option_name is not None:
+                    options[option_name] = None
+
+                option_name = match.group(1)
+                continue
+
+            if option_name is None:
+                arguments.append(args[i])
+            else:
+                options[option_name] = args[i]
+                option_name = None
+
+        if option_name is not None:
+            options[option_name] = None
+
+        return arguments, options
 
     def check_args(self, args):
         """
@@ -201,7 +209,6 @@ class TclCommand(object):
         """
 
         arguments, options = self.parse_arguments(args)
-
         named_args = {}
         unnamed_args = []
 
@@ -211,6 +218,7 @@ class TclCommand(object):
         for argument in arguments:
             if len(self.arg_names) > idx:
                 key, arg_type = arg_names_items[idx]
+
                 try:
                     named_args[key] = arg_type(argument)
                 except Exception as e:
@@ -226,7 +234,12 @@ class TclCommand(object):
                 self.raise_tcl_error('Unknown parameter: %s' % key)
             try:
                 if key != 'timeout':
-                    named_args[key] = self.option_types[key](options[key])
+                    # None options are allowed; if None then the defaults are used
+                    # - must be implemented in the Tcl commands
+                    if options[key] is not None:
+                        named_args[key] = self.option_types[key](options[key])
+                    else:
+                        named_args[key] = options[key]
                 else:
                     named_args[key] = int(options[key])
             except Exception as e:
@@ -251,6 +264,18 @@ class TclCommand(object):
 
         raise unknown_exception
 
+    def raise_tcl_error(self, text):
+        """
+        this method  pass exception from python into TCL as error, so we get stacktrace and reason
+        :param text: text of error
+        :return: raise exception
+        """
+
+        # because of signaling we cannot call error to TCL from here but when task
+        # is finished also non-signaled are handled here to better exception
+        # handling and  displayed after command is finished
+        raise self.app.shell.TclErrorException(text)
+
     def execute_wrapper(self, *args):
         """
         Command which is called by tcl console when current commands aliases are hit.
@@ -261,17 +286,16 @@ class TclCommand(object):
         :return: None, output text or exception
         """
 
-        #self.worker_task.emit({'fcn': self.exec_command_test, 'params': [text, False]})
-
+        # self.worker_task.emit({'fcn': self.exec_command_test, 'params': [text, False]})
         try:
-            self.log.debug("TCL command '%s' executed." % str(self.__class__))
+            self.log.debug("TCL command '%s' executed." % str(type(self).__name__))
             self.original_args = args
             args, unnamed_args = self.check_args(args)
             return self.execute(args, unnamed_args)
         except Exception as unknown:
             error_info = sys.exc_info()
-            self.log.error("TCL command '%s' failed." % str(self))
-            self.app.display_tcl_error(unknown, error_info)
+            self.log.error("TCL command '%s' failed. Error text: %s" % (str(self), str(unknown)))
+            self.app.shell.display_tcl_error(unknown, error_info)
             self.raise_tcl_unknown_error(unknown)
 
     @abc.abstractmethod
@@ -301,7 +325,7 @@ class TclCommandSignaled(TclCommand):
 
 
         This class is  child of  TclCommand and is used for commands  which create  new objects
-        it handles  all neccessary stuff about blocking and passing exeptions
+        it handles  all necessary stuff about blocking and passing exceptions
     """
 
     @abc.abstractmethod
@@ -363,7 +387,8 @@ class TclCommandSignaled(TclCommand):
 
             # Terminate on timeout
             if timeout is not None:
-                QtCore.QTimer.singleShot(timeout, report_quit)
+                time_val = int(timeout)
+                QtCore.QTimer.singleShot(time_val, report_quit)
 
             # Block
             loop.exec_()
@@ -374,24 +399,24 @@ class TclCommandSignaled(TclCommand):
                 raise ex[0]
 
             if status['timed_out']:
-                self.app.raise_tcl_unknown_error("Operation timed outed! Consider increasing option "
-                                                 "'-timeout <miliseconds>' for command or "
-                                                 "'set_sys background_timeout <miliseconds>'.")
+                self.app.shell.raise_tcl_unknown_error("Operation timed outed! Consider increasing option "
+                                                       "'-timeout <miliseconds>' for command or "
+                                                       "'set_sys global_background_timeout <miliseconds>'.")
 
         try:
-            self.log.debug("TCL command '%s' executed." % str(self.__class__))
+            self.log.debug("TCL command '%s' executed." % str(type(self).__name__))
             self.original_args = args
             args, unnamed_args = self.check_args(args)
             if 'timeout' in args:
                 passed_timeout = args['timeout']
                 del args['timeout']
             else:
-                passed_timeout = self.app.defaults['background_timeout']
+                passed_timeout = self.app.defaults['global_background_timeout']
 
             # set detail for processing, it will be there until next open or close
-            self.app.shell.open_proccessing(self.get_current_command())
+            self.app.shell.open_processing(self.get_current_command())
 
-            def handle_finished(obj):
+            def handle_finished():
                 self.app.shell_command_finished.disconnect(handle_finished)
                 if self.error is not None:
                     self.raise_tcl_unknown_error(self.error)
@@ -413,5 +438,5 @@ class TclCommandSignaled(TclCommand):
             else:
                 error_info = sys.exc_info()
             self.log.error("TCL command '%s' failed." % str(self))
-            self.app.display_tcl_error(unknown, error_info)
+            self.app.shell.display_tcl_error(unknown, error_info)
             self.raise_tcl_unknown_error(unknown)

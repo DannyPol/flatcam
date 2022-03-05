@@ -1,4 +1,6 @@
-from tclCommands.TclCommand import *
+from tclCommands.TclCommand import TclCommandSignaled
+
+import collections
 
 
 class TclCommandSaveProject(TclCommandSignaled):
@@ -8,6 +10,8 @@ class TclCommandSaveProject(TclCommandSignaled):
 
     # array of all command aliases, to be able use  old names for backward compatibility (add_poly, add_polygon)
     aliases = ['save_project']
+
+    description = '%s %s' % ("--", "Saves the FlatCAM project to file.")
 
     # Dictionary of types from Tcl command, needs to be ordered.
     # For positional arguments
@@ -28,9 +32,12 @@ class TclCommandSaveProject(TclCommandSignaled):
     help = {
         'main': "Saves the FlatCAM project to file.",
         'args': collections.OrderedDict([
-            ('filename', 'Path to file.'),
+            ('filename', 'Absolute path to file to save. Required.\n'
+                         'WARNING: no spaces are allowed. If unsure enclose the entire path with quotes.'),
         ]),
-        'examples': []
+        'examples': ['save_project D:\\my_project_file.FlatPrj',
+                     'save_project "D:\\my_project_file with spaces in the name.FlatPrj"',
+                     'save_project path_to_where_the_file_is_stored']
     }
 
     def execute(self, args, unnamed_args):
@@ -43,4 +50,4 @@ class TclCommandSaveProject(TclCommandSignaled):
         :return: None or exception
         """
 
-        self.app.save_project(args['filename'])
+        self.app.save_project(args['filename'], from_tcl=True)

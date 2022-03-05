@@ -1,9 +1,11 @@
-from tclCommands.TclCommand import *
+from tclCommands.TclCommand import TclCommand
+
+import collections
 
 
 class TclCommandSetActive(TclCommand):
     """
-    Tcl shell command to set an object as active in the GUI.
+    Tcl shell command to set an object as active in the appGUI.
 
     example:
 
@@ -11,6 +13,8 @@ class TclCommandSetActive(TclCommand):
 
     # List of all command aliases, to be able use old names for backward compatibility (add_poly, add_polygon)
     aliases = ['set_active']
+
+    description = '%s %s' % ("--", "Sets a FlatCAM object as active (selected).")
 
     # Dictionary of types from Tcl command, needs to be ordered
     arg_names = collections.OrderedDict([
@@ -27,11 +31,11 @@ class TclCommandSetActive(TclCommand):
 
     # structured help for current command, args needs to be ordered
     help = {
-        'main': 'Sets an object as active.',
+        'main': 'Sets a FlatCAM object as active (selected).',
         'args': collections.OrderedDict([
-            ('name', 'Name of the Object.'),
+            ('name', 'Name of the FlatCAM object to be set as active (selected). Required.'),
         ]),
-        'examples': []
+        'examples': ['set_active object_name']
     }
 
     def execute(self, args, unnamed_args):
